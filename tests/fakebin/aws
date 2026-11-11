@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Fake aws CLI for tests. Records every invocation and fakes just enough
+# output for deploy.sh to make decisions. Never touches real AWS.
+set -euo pipefail
+
+: "${FAKE_AWS_CALL_LOG:?FAKE_AWS_CALL_LOG must be set}"
+printf '%s\n' "$*" >>"$FAKE_AWS_CALL_LOG"
+
+service="$1"
+sub="$2"
+
+if [[ "$service" == "elbv2" ]] && [[ "$sub" == "describe-target-health" ]]; then
+	sequence_file="${FAKE_HEALTHY_SEQUENCE_FILE:-}"
+	if [[ -n "$sequence_file" ]] && [[ -s "$sequence_file" ]]; then
+		next=$(head -n 1 "$sequence_file")
+		tail -n +2 "$sequence_file" >"$sequence_file.tmp"
+		mv "$sequence_file.tmp" "$sequence_file"
+	else
+		next="${FAKE_HEALTHY_COUNT:-0}"
+	fi
+	echo "$next"
+	exit 0
+fi
+
+# All other calls (attach/detach/update-auto-scaling-group) just succeed.
+exit 0
