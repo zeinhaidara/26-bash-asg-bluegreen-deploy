@@ -1,0 +1,5 @@
+memory/
+.env
+.vscode/
+.idea/
+*.log
