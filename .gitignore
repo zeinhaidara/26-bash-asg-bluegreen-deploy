@@ -3,3 +3,6 @@ memory/
 .vscode/
 .idea/
 *.log
+*.tfplan
+__pycache__/
+*.pyc

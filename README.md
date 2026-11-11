@@ -1,4 +1,4 @@
-# asg-bluegreen-deploy
+# ASG blue/green and canary deploy framework
 
 A small Bash framework for blue/green deploys of two EC2 Auto Scaling Groups
 (ASGs) sharing one Application Load Balancer target group, with a canary
@@ -106,7 +106,7 @@ real account, the minimum IAM policy would need:
 
 No secrets or credentials are stored or required by this repository itself.
 
-## Testing status
+## Validation level
 
 - **Tested:** all deploy logic (canary gate, rollback on canary failure,
   rollback on cutover failure, full cutover, dry-run making zero calls,
