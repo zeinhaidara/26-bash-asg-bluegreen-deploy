@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Blue/green deploy with a canary gate for two EC2 Auto Scaling Groups
 # sharing one target group. See README.md for the full flow.
-set -euo pipefail
+set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../lib/log.sh
