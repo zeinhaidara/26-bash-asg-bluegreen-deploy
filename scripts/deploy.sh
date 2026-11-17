@@ -95,6 +95,21 @@ for required in BLUE_ASG GREEN_ASG TARGET_GROUP_ARN TARGET_CAPACITY; do
 	fi
 done
 
+# require_int <flag> <value> <min> [max]
+require_int() {
+	local flag="$1" value="$2" min="$3" max="${4:-}"
+	if [[ ! "$value" =~ ^(0|[1-9][0-9]*)$ ]] || ((value < min)) || { [[ -n "$max" ]] && ((value > max)); }; then
+		log_error "$flag must be an integer >= $min${max:+ and <= $max} (got '$value')"
+		exit 1
+	fi
+}
+
+require_int --target-capacity "$TARGET_CAPACITY" 1
+require_int --canary-percent "$CANARY_PERCENT" 1 100
+require_int --health-check-attempts "$HEALTH_CHECK_ATTEMPTS" 0
+require_int --health-check-interval "$HEALTH_CHECK_INTERVAL" 0
+require_int --drain-timeout "$DRAIN_TIMEOUT" 0
+
 if [[ "$DRY_RUN" == "true" ]]; then
 	log_warn "running in dry-run mode, no changes will be made (pass --apply to execute)"
 else

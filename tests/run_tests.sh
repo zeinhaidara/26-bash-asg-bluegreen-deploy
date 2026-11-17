@@ -237,6 +237,29 @@ if assert_eq 1 "$status" "missing arg exits 1" &&
 fi
 teardown_env
 
+# --- test: invalid numeric options fail fast with no aws calls ---
+setup_env
+bad_ok=true
+for bad in "--target-capacity 0" "--target-capacity abc" "--canary-percent 0" "--canary-percent 101" \
+	"--health-check-attempts -1" "--health-check-interval 1.5" "--drain-timeout x"; do
+	args=(--blue-asg blue-asg --green-asg green-asg --target-group-arn arn:x --target-capacity 5)
+	# shellcheck disable=SC2206
+	args+=($bad)
+	set +e
+	"$DEPLOY" "${args[@]}" --apply >/dev/null 2>&1
+	status=$?
+	set -e
+	if [[ "$status" != 1 ]] || [[ -s "$FAKE_AWS_CALL_LOG" ]]; then
+		echo "FAIL: '$bad' should exit 1 with no aws calls (status $status)"
+		FAIL_COUNT=$((FAIL_COUNT + 1))
+		bad_ok=false
+	fi
+done
+if [[ "$bad_ok" == true ]]; then
+	pass "invalid numeric options fail before any aws call"
+fi
+teardown_env
+
 echo ""
 echo "passed: $PASS_COUNT, failed: $FAIL_COUNT"
 if ((FAIL_COUNT > 0)); then
