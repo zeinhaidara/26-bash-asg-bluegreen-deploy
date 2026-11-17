@@ -157,6 +157,37 @@ if assert_eq 1 "$status" "failed cutover exits 1" &&
 fi
 teardown_env
 
+# --- test: re-run after completed cutover is a no-op ---
+setup_env
+FAKE_GREEN_DESIRED=5 FAKE_BLUE_DESIRED=0 "$DEPLOY" --blue-asg blue-asg --green-asg green-asg \
+	--target-group-arn arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/app/abc \
+	--target-capacity 5 --health-check-interval 0 --apply \
+	>/dev/null 2>&1
+status=$?
+if assert_eq 0 "$status" "completed cutover re-run exits 0" &&
+	! call_log_contains "update-auto-scaling-group" &&
+	! call_log_contains "attach-load-balancer-target-groups" &&
+	! call_log_contains "detach-load-balancer-target-groups"; then
+	pass "re-run after completed cutover makes no changes"
+fi
+teardown_env
+
+# --- test: canary never scales green below its current desired capacity ---
+setup_env
+seq_set 3 5
+FAKE_GREEN_DESIRED=3 FAKE_BLUE_DESIRED=2 "$DEPLOY" --blue-asg blue-asg --green-asg green-asg \
+	--target-group-arn arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/app/abc \
+	--target-capacity 5 --canary-percent 20 --health-check-interval 0 --apply \
+	>/dev/null 2>&1
+status=$?
+if assert_eq 0 "$status" "partial re-run exits 0" &&
+	! call_log_contains "green-asg --desired-capacity 1" &&
+	call_log_contains "green-asg --desired-capacity 3" &&
+	call_log_contains "green-asg --desired-capacity 5"; then
+	pass "canary does not scale green below current desired capacity"
+fi
+teardown_env
+
 # --- test: missing required argument fails fast with no aws calls ---
 setup_env
 set +e

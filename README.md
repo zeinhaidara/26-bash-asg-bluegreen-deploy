@@ -87,10 +87,13 @@ target capacity.
 
 ## Idempotency
 
-Re-running the script after a successful cutover is safe: green is already
-attached and at target capacity, blue is already at 0, so the canary and
-cutover steps just re-assert the same state. Re-running after a rollback
-is also safe: it retries the canary from scratch.
+With `--apply`, the script first reads both ASGs' desired capacity. If green
+is already at `--target-capacity` and blue is at 0, it logs that the cutover
+is complete and exits 0 without changes. Green is never scaled below its
+current desired capacity during the canary, so a re-run after a partial
+deploy resumes instead of shrinking green. Re-running after a rollback
+retries the canary from scratch. Dry-run skips these state checks to keep
+its zero-AWS-calls guarantee.
 
 ## Security notes
 

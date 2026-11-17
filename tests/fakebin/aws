@@ -10,6 +10,13 @@ service="$1"
 sub="$2"
 
 if [[ "$service" == "autoscaling" ]] && [[ "$sub" == "describe-auto-scaling-groups" ]]; then
+	if [[ "$*" == *DesiredCapacity* ]]; then
+		case "$*" in
+		*green-asg*) echo "${FAKE_GREEN_DESIRED:-0}" ;;
+		*) echo "${FAKE_BLUE_DESIRED:-0}" ;;
+		esac
+		exit 0
+	fi
 	case "$*" in
 	*green-asg*) echo "i-green1 i-green2" ;;
 	*) echo "i-blue1 i-blue2" ;;

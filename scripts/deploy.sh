@@ -129,6 +129,19 @@ set_capacity() {
 		--min-size 0
 }
 
+asg_desired_capacity() {
+	local desired
+	desired=$(aws_run autoscaling describe-auto-scaling-groups \
+		--auto-scaling-group-names "$1" \
+		--query "AutoScalingGroups[0].DesiredCapacity" \
+		--output text)
+	if [[ ! "$desired" =~ ^[0-9]+$ ]]; then
+		log_error "could not read desired capacity of $1 (got '$desired')"
+		return 1
+	fi
+	echo "$desired"
+}
+
 # InService instance IDs of an ASG, space separated.
 asg_instance_ids() {
 	aws_run autoscaling describe-auto-scaling-groups \
@@ -194,8 +207,22 @@ cutover() {
 }
 
 main() {
-	local canary_size
+	local canary_size green_desired=0 blue_desired
 	canary_size=$(canary_capacity "$TARGET_CAPACITY" "$CANARY_PERCENT")
+
+	# Dry-run makes no aws calls, so the state checks only run with --apply.
+	if [[ "$DRY_RUN" != "true" ]]; then
+		green_desired=$(asg_desired_capacity "$GREEN_ASG")
+		blue_desired=$(asg_desired_capacity "$BLUE_ASG")
+		if ((green_desired >= TARGET_CAPACITY && blue_desired == 0)); then
+			log_info "cutover already complete: $GREEN_ASG at $green_desired, $BLUE_ASG at 0"
+			exit 0
+		fi
+		# Never scale green down during the canary.
+		if ((green_desired > canary_size)); then
+			canary_size=$green_desired
+		fi
+	fi
 	log_info "starting canary: $GREEN_ASG at $canary_size/$TARGET_CAPACITY instances ($CANARY_PERCENT%)"
 
 	attach_to_target_group "$GREEN_ASG"
