@@ -73,7 +73,7 @@ Flags:
 (`attach-load-balancer-target-groups`, `update-auto-scaling-group`,
 `detach-load-balancer-target-groups`) is only logged, never executed, and
 health checks are skipped entirely and assumed to pass. A dry run makes
-zero AWS API calls.
+zero AWS API calls (`wait_for_healthy` returns before any `describe-*`).
 
 ## Rollback behavior
 
@@ -94,7 +94,7 @@ is also safe: it retries the canary from scratch.
 
 ## Security notes
 
-This script issues read-only `describe-target-health` calls and mutating
+This script issues read-only `describe-target-health` and `describe-auto-scaling-groups` calls and mutating
 `autoscaling`/`elbv2` calls. In dry-run mode (the default) it needs no AWS
 credentials at all — `aws` is never invoked. To run `--apply` against a
 real account, the minimum IAM policy would need:
@@ -103,6 +103,7 @@ real account, the minimum IAM policy would need:
 - `autoscaling:AttachLoadBalancerTargetGroups`
 - `autoscaling:DetachLoadBalancerTargetGroups`
 - `elasticloadbalancing:DescribeTargetHealth`
+- `autoscaling:DescribeAutoScalingGroups`
 
 No secrets or credentials are stored or required by this repository itself.
 
@@ -112,7 +113,9 @@ No secrets or credentials are stored or required by this repository itself.
   rollback on cutover failure, full cutover, dry-run making zero calls,
   argument validation) against a fake `aws` CLI script
   (`tests/fakebin/aws`) that records every invocation to a log file and
-  returns scripted health-check results. See `tests/run_tests.sh`. Every
+  returns scripted health-check results. The health gate counts only
+  healthy targets among green's InService instance IDs (blue's targets in
+  the shared group are ignored). See `tests/run_tests.sh`. Every
   bash file is also linted with `shellcheck`.
 - **Not tested:** this has never been run against a real AWS account, ASG,
   or target group. There is no integration test against live AWS APIs.

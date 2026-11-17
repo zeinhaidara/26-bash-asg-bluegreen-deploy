@@ -93,6 +93,31 @@ if assert_eq 0 "$status" "happy path exits 0" &&
 	call_log_contains "autoscaling update-auto-scaling-group --auto-scaling-group-name blue-asg --desired-capacity 0"; then
 	pass "happy path cuts over blue to green"
 fi
+if call_log_contains "--targets Id=i-green1 Id=i-green2" &&
+	! call_log_contains "Id=i-blue"; then
+	pass "health gate filters by green instance IDs"
+else
+	echo "FAIL: health gate must filter by green instance IDs"
+	FAIL_COUNT=$((FAIL_COUNT + 1))
+fi
+teardown_env
+
+# --- test: unfiltered count would pass (blue counted) but green is unhealthy ---
+setup_env
+seq_set 0 0
+set +e
+"$DEPLOY" --blue-asg blue-asg --green-asg green-asg \
+	--target-group-arn arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/app/abc \
+	--target-capacity 5 --canary-percent 20 --health-check-attempts 2 --health-check-interval 0 --apply \
+	>/dev/null 2>&1
+status=$?
+set -e
+if assert_eq 1 "$status" "unhealthy green exits 1" &&
+	call_log_contains "green-asg --desired-capacity 0" &&
+	! call_log_contains "blue-asg --desired-capacity 0" &&
+	! grep -F "describe-target-health" "$FAKE_AWS_CALL_LOG" | grep -qvF -- "--targets"; then
+	pass "unhealthy green rolls back even when blue inflates the group count"
+fi
 teardown_env
 
 # --- test: canary fails health check, rollback, blue untouched ---

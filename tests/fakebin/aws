@@ -9,7 +9,20 @@ printf '%s\n' "$*" >>"$FAKE_AWS_CALL_LOG"
 service="$1"
 sub="$2"
 
+if [[ "$service" == "autoscaling" ]] && [[ "$sub" == "describe-auto-scaling-groups" ]]; then
+	case "$*" in
+	*green-asg*) echo "i-green1 i-green2" ;;
+	*) echo "i-blue1 i-blue2" ;;
+	esac
+	exit 0
+fi
+
 if [[ "$service" == "elbv2" ]] && [[ "$sub" == "describe-target-health" ]]; then
+	# Unfiltered (no --targets) counts the whole shared group, blue included.
+	if [[ "$*" != *--targets* ]]; then
+		echo 99
+		exit 0
+	fi
 	sequence_file="${FAKE_HEALTHY_SEQUENCE_FILE:-}"
 	if [[ -n "$sequence_file" ]] && [[ -s "$sequence_file" ]]; then
 		next=$(head -n 1 "$sequence_file")

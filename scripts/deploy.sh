@@ -129,21 +129,41 @@ set_capacity() {
 		--min-size 0
 }
 
+# InService instance IDs of an ASG, space separated.
+asg_instance_ids() {
+	aws_run autoscaling describe-auto-scaling-groups \
+		--auto-scaling-group-names "$1" \
+		--query "AutoScalingGroups[0].Instances[?LifecycleState=='InService'].InstanceId" \
+		--output text
+}
+
+# Healthy targets among the given ASG's instances only. The target group is
+# shared, so an unfiltered count would include the other ASG.
 count_healthy_targets() {
+	local ids id targets=()
+	read -r -a ids <<<"$(asg_instance_ids "$1")"
+	if ((${#ids[@]} == 0)); then
+		echo 0
+		return 0
+	fi
+	for id in "${ids[@]}"; do
+		targets+=("Id=$id")
+	done
 	aws_run elbv2 describe-target-health \
 		--target-group-arn "$TARGET_GROUP_ARN" \
+		--targets "${targets[@]}" \
 		--query "length(TargetHealthDescriptions[?TargetHealth.State=='healthy'])" \
 		--output text
 }
 
 wait_for_healthy() {
-	local needed="$1" attempt healthy
+	local asg="$1" needed="$2" attempt healthy
 	if [[ "$DRY_RUN" == "true" ]]; then
 		log_info "[dry-run] assuming health check passes, skipping describe-target-health"
 		return 0
 	fi
 	for ((attempt = 1; attempt <= HEALTH_CHECK_ATTEMPTS; attempt++)); do
-		healthy=$(count_healthy_targets)
+		healthy=$(count_healthy_targets "$asg")
 		log_info "health check attempt $attempt/$HEALTH_CHECK_ATTEMPTS: $healthy/$needed healthy targets"
 		if ((healthy >= needed)); then
 			return 0
@@ -163,7 +183,7 @@ rollback_canary() {
 cutover() {
 	log_info "canary healthy, proceeding with full cutover to $GREEN_ASG"
 	set_capacity "$GREEN_ASG" "$TARGET_CAPACITY"
-	wait_for_healthy "$TARGET_CAPACITY" || {
+	wait_for_healthy "$GREEN_ASG" "$TARGET_CAPACITY" || {
 		log_error "full cutover health check failed, rolling back $GREEN_ASG"
 		rollback_canary
 		exit 1
@@ -181,7 +201,7 @@ main() {
 	attach_to_target_group "$GREEN_ASG"
 	set_capacity "$GREEN_ASG" "$canary_size"
 
-	if wait_for_healthy "$canary_size"; then
+	if wait_for_healthy "$GREEN_ASG" "$canary_size"; then
 		cutover
 	else
 		rollback_canary
