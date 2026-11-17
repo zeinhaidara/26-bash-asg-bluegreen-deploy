@@ -126,7 +126,7 @@ No secrets or credentials are stored or required by this repository itself.
 - **Not tested:** this has never been run against a real AWS account, ASG,
   or target group. There is no integration test against live AWS APIs.
 - The test runner is a small hand-rolled script rather than bats-core,
-  since the test matrix is small (five cases) and a hand-rolled runner
+  since the test matrix is small and a hand-rolled runner
   keeps the dependency list at zero for both local runs and CI.
 
 ## Running tests locally
