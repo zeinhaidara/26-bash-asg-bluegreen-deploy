@@ -260,6 +260,19 @@ if [[ "$bad_ok" == true ]]; then
 fi
 teardown_env
 
+# --- test: option missing its value gives a clear error ---
+setup_env
+set +e
+"$DEPLOY" --target-capacity 5 --blue-asg >/dev/null 2>"$WORK_DIR/err"
+status=$?
+set -e
+if assert_eq 1 "$status" "missing option value exits 1" &&
+	grep -qF -- "--blue-asg requires a value" "$WORK_DIR/err" &&
+	assert_empty_file "$FAKE_AWS_CALL_LOG" "missing value makes no aws calls"; then
+	pass "option without a value fails with a clear error"
+fi
+teardown_env
+
 echo ""
 echo "passed: $PASS_COUNT, failed: $FAIL_COUNT"
 if ((FAIL_COUNT > 0)); then

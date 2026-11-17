@@ -22,6 +22,14 @@ actually attach/detach/scale the Auto Scaling Groups.
 EOF
 }
 
+need_value() {
+	if (($# < 2)); then
+		log_error "$1 requires a value"
+		usage
+		exit 1
+	fi
+}
+
 trap 'log_error "deploy failed at line $LINENO"' ERR
 
 BLUE_ASG=""
@@ -36,34 +44,42 @@ DRAIN_TIMEOUT=300
 while [[ $# -gt 0 ]]; do
 	case "$1" in
 	--blue-asg)
+		need_value "$@"
 		BLUE_ASG="$2"
 		shift 2
 		;;
 	--green-asg)
+		need_value "$@"
 		GREEN_ASG="$2"
 		shift 2
 		;;
 	--target-group-arn)
+		need_value "$@"
 		TARGET_GROUP_ARN="$2"
 		shift 2
 		;;
 	--target-capacity)
+		need_value "$@"
 		TARGET_CAPACITY="$2"
 		shift 2
 		;;
 	--canary-percent)
+		need_value "$@"
 		CANARY_PERCENT="$2"
 		shift 2
 		;;
 	--health-check-attempts)
+		need_value "$@"
 		HEALTH_CHECK_ATTEMPTS="$2"
 		shift 2
 		;;
 	--health-check-interval)
+		need_value "$@"
 		HEALTH_CHECK_INTERVAL="$2"
 		shift 2
 		;;
 	--drain-timeout)
+		need_value "$@"
 		DRAIN_TIMEOUT="$2"
 		shift 2
 		;;
