@@ -94,7 +94,7 @@ if assert_eq 0 "$status" "happy path exits 0" &&
 	pass "happy path cuts over blue to green"
 fi
 if call_log_contains "--targets Id=i-green1 Id=i-green2" &&
-	! call_log_contains "Id=i-blue"; then
+	! grep -F "Id=i-blue" "$FAKE_AWS_CALL_LOG" | grep -qvF "draining"; then
 	pass "health gate filters by green instance IDs"
 else
 	echo "FAIL: health gate must filter by green instance IDs"
@@ -186,6 +186,43 @@ if assert_eq 0 "$status" "partial re-run exits 0" &&
 	call_log_contains "green-asg --desired-capacity 5"; then
 	pass "canary does not scale green below current desired capacity"
 fi
+teardown_env
+
+# --- test: blue is drained before being scaled to 0 ---
+setup_env
+seq_set 1 5
+export FAKE_DRAIN_SEQUENCE_FILE="$WORK_DIR/drain"
+printf '%s\n' 2 1 0 >"$FAKE_DRAIN_SEQUENCE_FILE"
+"$DEPLOY" --blue-asg blue-asg --green-asg green-asg \
+	--target-group-arn arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/app/abc \
+	--target-capacity 5 --health-check-interval 0 --apply \
+	>/dev/null 2>&1
+status=$?
+drain_polls=$(grep -c "draining" "$FAKE_AWS_CALL_LOG" || true)
+if assert_eq 0 "$status" "drain path exits 0" &&
+	assert_eq 3 "$drain_polls" "polls drain state until none draining" &&
+	call_log_contains "describe-target-health --target-group-arn arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/app/abc --targets Id=i-blue1 Id=i-blue2" &&
+	assert_eq "autoscaling update-auto-scaling-group --auto-scaling-group-name blue-asg --desired-capacity 0 --min-size 0" "$(tail -n 1 "$FAKE_AWS_CALL_LOG")" "blue scaled to 0 only after drain"; then
+	pass "cutover waits for blue to drain before scaling it down"
+fi
+unset FAKE_DRAIN_SEQUENCE_FILE
+teardown_env
+
+# --- test: drain timeout does not block the scale-down ---
+setup_env
+seq_set 1 5
+export FAKE_DRAIN_SEQUENCE_FILE="$WORK_DIR/drain"
+printf '%s\n' 2 2 2 2 >"$FAKE_DRAIN_SEQUENCE_FILE"
+"$DEPLOY" --blue-asg blue-asg --green-asg green-asg \
+	--target-group-arn arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/app/abc \
+	--target-capacity 5 --health-check-interval 0 --drain-timeout 0 --apply \
+	>/dev/null 2>&1
+status=$?
+if assert_eq 0 "$status" "drain timeout exits 0" &&
+	call_log_contains "blue-asg --desired-capacity 0"; then
+	pass "drain timeout proceeds to scale blue down"
+fi
+unset FAKE_DRAIN_SEQUENCE_FILE
 teardown_env
 
 # --- test: missing required argument fails fast with no aws calls ---

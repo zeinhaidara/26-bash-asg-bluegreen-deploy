@@ -25,6 +25,17 @@ if [[ "$service" == "autoscaling" ]] && [[ "$sub" == "describe-auto-scaling-grou
 fi
 
 if [[ "$service" == "elbv2" ]] && [[ "$sub" == "describe-target-health" ]]; then
+	if [[ "$*" == *draining* ]]; then
+		drain_file="${FAKE_DRAIN_SEQUENCE_FILE:-}"
+		if [[ -n "$drain_file" ]] && [[ -s "$drain_file" ]]; then
+			head -n 1 "$drain_file"
+			tail -n +2 "$drain_file" >"$drain_file.tmp"
+			mv "$drain_file.tmp" "$drain_file"
+		else
+			echo 0
+		fi
+		exit 0
+	fi
 	# Unfiltered (no --targets) counts the whole shared group, blue included.
 	if [[ "$*" != *--targets* ]]; then
 		echo 99

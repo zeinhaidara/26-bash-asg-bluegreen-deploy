@@ -14,6 +14,7 @@ usage() {
 Usage: deploy.sh --blue-asg NAME --green-asg NAME --target-group-arn ARN \
                   --target-capacity N [--canary-percent N] \
                   [--health-check-attempts N] [--health-check-interval SECONDS] \
+                  [--drain-timeout SECONDS] \
                   [--apply]
 
 Defaults to dry-run (no mutating aws calls are issued). Pass --apply to
@@ -30,6 +31,7 @@ TARGET_CAPACITY=""
 CANARY_PERCENT=20
 HEALTH_CHECK_ATTEMPTS=5
 HEALTH_CHECK_INTERVAL=5
+DRAIN_TIMEOUT=300
 
 while [[ $# -gt 0 ]]; do
 	case "$1" in
@@ -59,6 +61,10 @@ while [[ $# -gt 0 ]]; do
 		;;
 	--health-check-interval)
 		HEALTH_CHECK_INTERVAL="$2"
+		shift 2
+		;;
+	--drain-timeout)
+		DRAIN_TIMEOUT="$2"
 		shift 2
 		;;
 	--apply)
@@ -186,6 +192,30 @@ wait_for_healthy() {
 	return 1
 }
 
+# Wait until none of the given instance IDs are draining, or the timeout hits.
+wait_for_drain() {
+	local deadline=$((SECONDS + DRAIN_TIMEOUT)) draining id targets=()
+	for id in "$@"; do
+		targets+=("Id=$id")
+	done
+	while :; do
+		draining=$(aws_run elbv2 describe-target-health \
+			--target-group-arn "$TARGET_GROUP_ARN" \
+			--targets "${targets[@]}" \
+			--query "length(TargetHealthDescriptions[?TargetHealth.State=='draining'])" \
+			--output text)
+		if ((draining == 0)); then
+			return 0
+		fi
+		if ((SECONDS >= deadline)); then
+			log_warn "drain timeout after ${DRAIN_TIMEOUT}s, $draining targets still draining"
+			return 0
+		fi
+		log_info "waiting for $draining targets to drain"
+		sleep "$HEALTH_CHECK_INTERVAL"
+	done
+}
+
 rollback_canary() {
 	log_error "canary health check failed, rolling back $GREEN_ASG"
 	set_capacity "$GREEN_ASG" 0
@@ -201,7 +231,17 @@ cutover() {
 		rollback_canary
 		exit 1
 	}
+	# Capture IDs before detaching: they are needed to poll deregistration.
+	local blue_ids=()
+	if [[ "$DRY_RUN" != "true" ]]; then
+		read -r -a blue_ids <<<"$(asg_instance_ids "$BLUE_ASG")"
+	fi
 	detach_from_target_group "$BLUE_ASG"
+	if ((${#blue_ids[@]} > 0)); then
+		wait_for_drain "${blue_ids[@]}"
+	else
+		log_info "skipping connection drain wait"
+	fi
 	set_capacity "$BLUE_ASG" 0
 	log_info "cutover complete: $GREEN_ASG is now serving traffic, $BLUE_ASG scaled to 0"
 }

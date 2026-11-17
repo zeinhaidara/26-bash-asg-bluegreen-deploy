@@ -32,7 +32,8 @@ flowchart TD
     G --> H{Full capacity healthy?}
     H -- no --> E
     H -- yes --> I[Detach blue from target group]
-    I --> J[Scale blue to 0]
+    I --> I2[Wait for blue targets to drain]
+    I2 --> J[Scale blue to 0]
     J --> K[Exit 0: green is now active]
 ```
 
@@ -66,6 +67,7 @@ Flags:
 | `--canary-percent` | `20` | percent of target capacity to run as the canary step |
 | `--health-check-attempts` | `5` | polling attempts per health gate |
 | `--health-check-interval` | `5` | seconds between polling attempts |
+| `--drain-timeout` | `300` | max seconds to wait for detached blue targets to finish draining before scaling blue to 0 (skipped in dry-run) |
 | `--apply` | off | actually make changes (mutating AWS calls) |
 | `--dry-run` | **on by default** | log what would run, make no mutating calls |
 
@@ -82,7 +84,8 @@ detached. Blue is never touched, so the failure is a no-op from the load
 balancer's point of view. If the canary passes but the *full-capacity*
 health check after scaling green up fails, the same rollback runs before
 blue is ever detached — blue keeps serving traffic the whole time. Blue is
-only detached and scaled down after green has proven healthy at full
+only detached and scaled down (after its targets finish draining, up to
+`--drain-timeout`) after green has proven healthy at full
 target capacity.
 
 ## Idempotency
