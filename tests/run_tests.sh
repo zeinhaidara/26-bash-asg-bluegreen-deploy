@@ -93,6 +93,31 @@ if assert_eq 0 "$status" "happy path exits 0" &&
 	call_log_contains "autoscaling update-auto-scaling-group --auto-scaling-group-name blue-asg --desired-capacity 0"; then
 	pass "happy path cuts over blue to green"
 fi
+if call_log_contains "--targets Id=i-green1 Id=i-green2" &&
+	! grep -F "Id=i-blue" "$FAKE_AWS_CALL_LOG" | grep -qvF "draining"; then
+	pass "health gate filters by green instance IDs"
+else
+	echo "FAIL: health gate must filter by green instance IDs"
+	FAIL_COUNT=$((FAIL_COUNT + 1))
+fi
+teardown_env
+
+# --- test: unfiltered count would pass (blue counted) but green is unhealthy ---
+setup_env
+seq_set 0 0
+set +e
+"$DEPLOY" --blue-asg blue-asg --green-asg green-asg \
+	--target-group-arn arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/app/abc \
+	--target-capacity 5 --canary-percent 20 --health-check-attempts 2 --health-check-interval 0 --apply \
+	>/dev/null 2>&1
+status=$?
+set -e
+if assert_eq 1 "$status" "unhealthy green exits 1" &&
+	call_log_contains "green-asg --desired-capacity 0" &&
+	! call_log_contains "blue-asg --desired-capacity 0" &&
+	! grep -F "describe-target-health" "$FAKE_AWS_CALL_LOG" | grep -qvF -- "--targets"; then
+	pass "unhealthy green rolls back even when blue inflates the group count"
+fi
 teardown_env
 
 # --- test: canary fails health check, rollback, blue untouched ---
@@ -132,6 +157,74 @@ if assert_eq 1 "$status" "failed cutover exits 1" &&
 fi
 teardown_env
 
+# --- test: re-run after completed cutover is a no-op ---
+setup_env
+FAKE_GREEN_DESIRED=5 FAKE_BLUE_DESIRED=0 "$DEPLOY" --blue-asg blue-asg --green-asg green-asg \
+	--target-group-arn arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/app/abc \
+	--target-capacity 5 --health-check-interval 0 --apply \
+	>/dev/null 2>&1
+status=$?
+if assert_eq 0 "$status" "completed cutover re-run exits 0" &&
+	! call_log_contains "update-auto-scaling-group" &&
+	! call_log_contains "attach-load-balancer-target-groups" &&
+	! call_log_contains "detach-load-balancer-target-groups"; then
+	pass "re-run after completed cutover makes no changes"
+fi
+teardown_env
+
+# --- test: canary never scales green below its current desired capacity ---
+setup_env
+seq_set 3 5
+FAKE_GREEN_DESIRED=3 FAKE_BLUE_DESIRED=2 "$DEPLOY" --blue-asg blue-asg --green-asg green-asg \
+	--target-group-arn arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/app/abc \
+	--target-capacity 5 --canary-percent 20 --health-check-interval 0 --apply \
+	>/dev/null 2>&1
+status=$?
+if assert_eq 0 "$status" "partial re-run exits 0" &&
+	! call_log_contains "green-asg --desired-capacity 1" &&
+	call_log_contains "green-asg --desired-capacity 3" &&
+	call_log_contains "green-asg --desired-capacity 5"; then
+	pass "canary does not scale green below current desired capacity"
+fi
+teardown_env
+
+# --- test: blue is drained before being scaled to 0 ---
+setup_env
+seq_set 1 5
+export FAKE_DRAIN_SEQUENCE_FILE="$WORK_DIR/drain"
+printf '%s\n' 2 1 0 >"$FAKE_DRAIN_SEQUENCE_FILE"
+"$DEPLOY" --blue-asg blue-asg --green-asg green-asg \
+	--target-group-arn arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/app/abc \
+	--target-capacity 5 --health-check-interval 0 --apply \
+	>/dev/null 2>&1
+status=$?
+drain_polls=$(grep -c "draining" "$FAKE_AWS_CALL_LOG" || true)
+if assert_eq 0 "$status" "drain path exits 0" &&
+	assert_eq 3 "$drain_polls" "polls drain state until none draining" &&
+	call_log_contains "describe-target-health --target-group-arn arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/app/abc --targets Id=i-blue1 Id=i-blue2" &&
+	assert_eq "autoscaling update-auto-scaling-group --auto-scaling-group-name blue-asg --desired-capacity 0 --min-size 0" "$(tail -n 1 "$FAKE_AWS_CALL_LOG")" "blue scaled to 0 only after drain"; then
+	pass "cutover waits for blue to drain before scaling it down"
+fi
+unset FAKE_DRAIN_SEQUENCE_FILE
+teardown_env
+
+# --- test: drain timeout does not block the scale-down ---
+setup_env
+seq_set 1 5
+export FAKE_DRAIN_SEQUENCE_FILE="$WORK_DIR/drain"
+printf '%s\n' 2 2 2 2 >"$FAKE_DRAIN_SEQUENCE_FILE"
+"$DEPLOY" --blue-asg blue-asg --green-asg green-asg \
+	--target-group-arn arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/app/abc \
+	--target-capacity 5 --health-check-interval 0 --drain-timeout 0 --apply \
+	>/dev/null 2>&1
+status=$?
+if assert_eq 0 "$status" "drain timeout exits 0" &&
+	call_log_contains "blue-asg --desired-capacity 0"; then
+	pass "drain timeout proceeds to scale blue down"
+fi
+unset FAKE_DRAIN_SEQUENCE_FILE
+teardown_env
+
 # --- test: missing required argument fails fast with no aws calls ---
 setup_env
 set +e
@@ -141,6 +234,42 @@ set -e
 if assert_eq 1 "$status" "missing arg exits 1" &&
 	assert_empty_file "$FAKE_AWS_CALL_LOG" "missing arg makes no aws calls"; then
 	pass "missing required argument fails before any aws call"
+fi
+teardown_env
+
+# --- test: invalid numeric options fail fast with no aws calls ---
+setup_env
+bad_ok=true
+for bad in "--target-capacity 0" "--target-capacity abc" "--canary-percent 0" "--canary-percent 101" \
+	"--health-check-attempts -1" "--health-check-interval 1.5" "--drain-timeout x"; do
+	args=(--blue-asg blue-asg --green-asg green-asg --target-group-arn arn:x --target-capacity 5)
+	# shellcheck disable=SC2206
+	args+=($bad)
+	set +e
+	"$DEPLOY" "${args[@]}" --apply >/dev/null 2>&1
+	status=$?
+	set -e
+	if [[ "$status" != 1 ]] || [[ -s "$FAKE_AWS_CALL_LOG" ]]; then
+		echo "FAIL: '$bad' should exit 1 with no aws calls (status $status)"
+		FAIL_COUNT=$((FAIL_COUNT + 1))
+		bad_ok=false
+	fi
+done
+if [[ "$bad_ok" == true ]]; then
+	pass "invalid numeric options fail before any aws call"
+fi
+teardown_env
+
+# --- test: option missing its value gives a clear error ---
+setup_env
+set +e
+"$DEPLOY" --target-capacity 5 --blue-asg >/dev/null 2>"$WORK_DIR/err"
+status=$?
+set -e
+if assert_eq 1 "$status" "missing option value exits 1" &&
+	grep -qF -- "--blue-asg requires a value" "$WORK_DIR/err" &&
+	assert_empty_file "$FAKE_AWS_CALL_LOG" "missing value makes no aws calls"; then
+	pass "option without a value fails with a clear error"
 fi
 teardown_env
 

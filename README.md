@@ -32,7 +32,8 @@ flowchart TD
     G --> H{Full capacity healthy?}
     H -- no --> E
     H -- yes --> I[Detach blue from target group]
-    I --> J[Scale blue to 0]
+    I --> I2[Wait for blue targets to drain]
+    I2 --> J[Scale blue to 0]
     J --> K[Exit 0: green is now active]
 ```
 
@@ -66,6 +67,7 @@ Flags:
 | `--canary-percent` | `20` | percent of target capacity to run as the canary step |
 | `--health-check-attempts` | `5` | polling attempts per health gate |
 | `--health-check-interval` | `5` | seconds between polling attempts |
+| `--drain-timeout` | `300` | max seconds to wait for detached blue targets to finish draining before scaling blue to 0 (skipped in dry-run) |
 | `--apply` | off | actually make changes (mutating AWS calls) |
 | `--dry-run` | **on by default** | log what would run, make no mutating calls |
 
@@ -73,7 +75,7 @@ Flags:
 (`attach-load-balancer-target-groups`, `update-auto-scaling-group`,
 `detach-load-balancer-target-groups`) is only logged, never executed, and
 health checks are skipped entirely and assumed to pass. A dry run makes
-zero AWS API calls.
+zero AWS API calls (`wait_for_healthy` returns before any `describe-*`).
 
 ## Rollback behavior
 
@@ -82,19 +84,23 @@ detached. Blue is never touched, so the failure is a no-op from the load
 balancer's point of view. If the canary passes but the *full-capacity*
 health check after scaling green up fails, the same rollback runs before
 blue is ever detached — blue keeps serving traffic the whole time. Blue is
-only detached and scaled down after green has proven healthy at full
+only detached and scaled down (after its targets finish draining, up to
+`--drain-timeout`) after green has proven healthy at full
 target capacity.
 
 ## Idempotency
 
-Re-running the script after a successful cutover is safe: green is already
-attached and at target capacity, blue is already at 0, so the canary and
-cutover steps just re-assert the same state. Re-running after a rollback
-is also safe: it retries the canary from scratch.
+With `--apply`, the script first reads both ASGs' desired capacity. If green
+is already at `--target-capacity` and blue is at 0, it logs that the cutover
+is complete and exits 0 without changes. Green is never scaled below its
+current desired capacity during the canary, so a re-run after a partial
+deploy resumes instead of shrinking green. Re-running after a rollback
+retries the canary from scratch. Dry-run skips these state checks to keep
+its zero-AWS-calls guarantee.
 
 ## Security notes
 
-This script issues read-only `describe-target-health` calls and mutating
+This script issues read-only `describe-target-health` and `describe-auto-scaling-groups` calls and mutating
 `autoscaling`/`elbv2` calls. In dry-run mode (the default) it needs no AWS
 credentials at all — `aws` is never invoked. To run `--apply` against a
 real account, the minimum IAM policy would need:
@@ -103,6 +109,7 @@ real account, the minimum IAM policy would need:
 - `autoscaling:AttachLoadBalancerTargetGroups`
 - `autoscaling:DetachLoadBalancerTargetGroups`
 - `elasticloadbalancing:DescribeTargetHealth`
+- `autoscaling:DescribeAutoScalingGroups`
 
 No secrets or credentials are stored or required by this repository itself.
 
@@ -112,12 +119,14 @@ No secrets or credentials are stored or required by this repository itself.
   rollback on cutover failure, full cutover, dry-run making zero calls,
   argument validation) against a fake `aws` CLI script
   (`tests/fakebin/aws`) that records every invocation to a log file and
-  returns scripted health-check results. See `tests/run_tests.sh`. Every
+  returns scripted health-check results. The health gate counts only
+  healthy targets among green's InService instance IDs (blue's targets in
+  the shared group are ignored). See `tests/run_tests.sh`. Every
   bash file is also linted with `shellcheck`.
 - **Not tested:** this has never been run against a real AWS account, ASG,
   or target group. There is no integration test against live AWS APIs.
 - The test runner is a small hand-rolled script rather than bats-core,
-  since the test matrix is small (five cases) and a hand-rolled runner
+  since the test matrix is small and a hand-rolled runner
   keeps the dependency list at zero for both local runs and CI.
 
 ## Running tests locally
