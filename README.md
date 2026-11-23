@@ -9,6 +9,11 @@ step and an automated health-check gate.
 Write a robust Bash framework (with logging, error handling, dry-run mode)
 for performing blue/green or canary deployments of EC2 Auto Scaling Groups.
 
+Why it matters: replacing a fleet in place means a bad release reaches every
+instance before anyone sees it fail. Bringing up the new ASG next to the old
+one, checking a canary slice first, and keeping the old ASG serving until the
+new one is healthy makes a bad release a rollback instead of an outage.
+
 ## Scope and design choice
 
 There are several valid ways to implement a blue/green ASG swap (swapping
